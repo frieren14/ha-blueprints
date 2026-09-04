@@ -37,8 +37,8 @@ blueprint:
       name: Minimum brightness on hold-down
       description: >
         Lowest brightness reached while holding the bottom button.
-        Set this to 10% if you want the lights to stop dimming at 10%.
-      default: 10
+        The default is 1%.
+      default: 1
       selector:
         number:
           min: 1
