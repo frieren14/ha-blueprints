@@ -1,5 +1,5 @@
 blueprint:
-  name: IKEA STYRBAR — IKEA-style light control (Zigbee2MQTT) v1.1
+  name: IKEA STYRBAR
   description: >
     Makes an IKEA STYRBAR remote behave like IKEA's own light control:
     short press top/bottom turns lights on/off; holding top/bottom dims;
@@ -144,9 +144,6 @@ variables:
     - kind: temp
       value: 2200
       name: Warm glow
-    - kind: temp
-      value: 1780
-      name: Candle light
 
 triggers:
   - trigger: device
@@ -329,59 +326,7 @@ actions:
       - conditions: "{{ trigger.id in ['left_click', 'right_click'] }}"
         sequence:
           - variables:
-              reference_light: "{{ selected_lights[0] }}"
-          - variables:
-              reference_modes: "{{ state_attr(reference_light, 'supported_color_modes') or [] }}"
-              current_mode: "{{ state_attr(reference_light, 'color_mode') or '' }}"
-          - variables:
-              has_colour: >
-                {{ 'hs' in reference_modes or 'xy' in reference_modes
-                   or 'rgb' in reference_modes or 'rgbw' in reference_modes
-                   or 'rgbww' in reference_modes }}
-          - variables:
-              active_palette: >
-                {{ ikea_full_palette if has_colour else ikea_white_palette }}
-          - variables:
-              current_index: >-
-                {% set ns = namespace(best=0, distance=999999.0) %}
-                {% if current_mode == 'color_temp' %}
-                  {% set current_k = state_attr(reference_light, 'color_temp_kelvin') | int(2700) %}
-                  {% for preset in active_palette %}
-                    {% if preset.kind == 'temp' %}
-                      {% set distance = (preset.value - current_k) | abs | float %}
-                      {% if distance < ns.distance %}
-                        {% set ns.best = loop.index0 %}
-                        {% set ns.distance = distance %}
-                      {% endif %}
-                    {% endif %}
-                  {% endfor %}
-                {% else %}
-                  {% set current_hs = state_attr(reference_light, 'hs_color') %}
-                  {% if current_hs %}
-                    {% set current_h = current_hs[0] | float %}
-                    {% set current_s = current_hs[1] | float %}
-                    {% for preset in active_palette %}
-                      {% if preset.kind == 'hs' %}
-                        {% set raw_hue = (preset.value[0] - current_h) | abs | float %}
-                        {% set hue_distance = [raw_hue, 360 - raw_hue] | min %}
-                        {% set sat_distance = (preset.value[1] - current_s) | abs | float %}
-                        {% set distance = hue_distance + (sat_distance * 0.5) %}
-                        {% if distance < ns.distance %}
-                          {% set ns.best = loop.index0 %}
-                          {% set ns.distance = distance %}
-                        {% endif %}
-                      {% endif %}
-                    {% endfor %}
-                  {% endif %}
-                {% endif %}
-                {{ ns.best }}
               direction: "{{ 1 if trigger.id == 'right_click' else -1 }}"
-          - variables:
-              next_index: >
-                {{ (((current_index | int) + (direction | int)) % (active_palette | count)) }}
-          - variables:
-              next_preset: "{{ active_palette[next_index | int] }}"
-
           - repeat:
               for_each: "{{ selected_lights }}"
               sequence:
@@ -389,8 +334,68 @@ actions:
                     light_entity: "{{ repeat.item }}"
                 - variables:
                     modes: "{{ state_attr(light_entity, 'supported_color_modes') or [] }}"
+                    current_mode: "{{ state_attr(light_entity, 'color_mode') or '' }}"
                     min_k: "{{ state_attr(light_entity, 'min_color_temp_kelvin') | int(2000) }}"
                     max_k: "{{ state_attr(light_entity, 'max_color_temp_kelvin') | int(6500) }}"
+                - variables:
+                    has_colour: >
+                      {{ 'hs' in modes or 'xy' in modes or 'rgb' in modes
+                         or 'rgbw' in modes or 'rgbww' in modes }}
+                - variables:
+                    base_palette: >
+                      {{ ikea_full_palette if has_colour else ikea_white_palette }}
+                - variables:
+                    active_palette: >-
+                      {% set ns = namespace(items=[]) %}
+                      {%- for preset in base_palette %}
+                        {%- if preset.kind != 'temp'
+                               or (preset.value | int >= min_k | int
+                                   and preset.value | int <= max_k | int) %}
+                          {%- set ns.items = ns.items + [preset] %}
+                        {%- endif %}
+                      {%- endfor %}
+                      {{- ns.items }}
+                - condition: template
+                  value_template: "{{ active_palette | count > 0 }}"
+                - variables:
+                    current_index: >-
+                      {% set ns = namespace(best=0, distance=999999.0) %}
+                      {% if current_mode == 'color_temp' %}
+                        {% set current_k = state_attr(light_entity, 'color_temp_kelvin') | int(2700) %}
+                        {% for preset in active_palette %}
+                          {% if preset.kind == 'temp' %}
+                            {% set distance = (preset.value - current_k) | abs | float %}
+                            {% if distance < ns.distance %}
+                              {% set ns.best = loop.index0 %}
+                              {% set ns.distance = distance %}
+                            {% endif %}
+                          {% endif %}
+                        {% endfor %}
+                      {% else %}
+                        {% set current_hs = state_attr(light_entity, 'hs_color') %}
+                        {% if current_hs %}
+                          {% set current_h = current_hs[0] | float %}
+                          {% set current_s = current_hs[1] | float %}
+                          {% for preset in active_palette %}
+                            {% if preset.kind == 'hs' %}
+                              {% set raw_hue = (preset.value[0] - current_h) | abs | float %}
+                              {% set hue_distance = [raw_hue, 360 - raw_hue] | min %}
+                              {% set sat_distance = (preset.value[1] - current_s) | abs | float %}
+                              {% set distance = hue_distance + (sat_distance * 0.5) %}
+                              {% if distance < ns.distance %}
+                                {% set ns.best = loop.index0 %}
+                                {% set ns.distance = distance %}
+                              {% endif %}
+                            {% endif %}
+                          {% endfor %}
+                        {% endif %}
+                      {% endif %}
+                      {{ ns.best }}
+                - variables:
+                    next_index: >
+                      {{ (((current_index | int) + (direction | int)) % (active_palette | count)) }}
+                - variables:
+                    next_preset: "{{ active_palette[next_index | int] }}"
                 - choose:
                     - conditions: >
                         {{ next_preset.kind == 'temp' and 'color_temp' in modes }}
