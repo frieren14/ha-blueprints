@@ -1,0 +1,522 @@
+blueprint:
+  name: IKEA TRÅDFRI Remote
+  description: >
+    Makes the round IKEA TRÅDFRI five-button remote (E1524/E1810) behave
+    like IKEA's own light control: the centre button toggles the lights;
+    holding it synchronizes them to full brightness and 2700 K; the upper
+    and lower buttons step or continuously adjust brightness; and the left
+    and right buttons step through the IKEA white/colour palette. Select one
+    TRÅDFRI remote and any number of Home Assistant light entities.
+  domain: automation
+  author: ChatGPT
+  homeassistant:
+    min_version: 2024.6.0
+
+  input:
+    controller:
+      name: TRÅDFRI remote
+      description: >
+        Select the round E1524/E1810 remote exposed to Home Assistant by
+        Zigbee2MQTT. If some button actions are missing, press and hold every
+        button once so Zigbee2MQTT can discover its MQTT device triggers.
+      selector:
+        device:
+          filter:
+            - integration: mqtt
+
+    lights:
+      name: Lights
+      description: Select one or more light entities controlled as one IKEA-style group.
+      selector:
+        entity:
+          multiple: true
+          reorder: true
+          filter:
+            - domain: light
+
+    min_brightness:
+      name: Minimum brightness
+      description: Lowest brightness reached with the lower brightness button.
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 50
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+
+    turn_off_at_minimum:
+      name: Turn off when minimum is reached
+      description: >
+        Disabled matches IKEA behavior and leaves the lights at minimum
+        brightness. When enabled, pressing or holding down again turns them off.
+      default: false
+      selector:
+        boolean:
+
+    advanced:
+      name: Advanced
+      icon: mdi:cog
+      collapsed: true
+      input:
+        brightness_step:
+          name: Brightness step
+          description: Brightness change for a short press of the upper or lower button.
+          default: 17
+          selector:
+            number:
+              min: 1
+              max: 50
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+
+        dim_step:
+          name: Held dimming step
+          description: Brightness change per tick while a brightness button is held.
+          default: 4
+          selector:
+            number:
+              min: 1
+              max: 10
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+
+        dim_interval:
+          name: Held dimming interval
+          description: Time between brightness changes while a brightness button is held.
+          default: 120
+          selector:
+            number:
+              min: 50
+              max: 500
+              step: 10
+              unit_of_measurement: ms
+              mode: slider
+
+        transition:
+          name: Light transition
+          description: Transition used for power, brightness and colour changes.
+          default: 0.15
+          selector:
+            number:
+              min: 0
+              max: 2
+              step: 0.05
+              unit_of_measurement: s
+              mode: slider
+
+variables:
+  selected_lights: !input lights
+  brightness_step_pct: !input brightness_step
+  dim_step_pct: !input dim_step
+  dim_interval_ms: !input dim_interval
+  min_brightness_pct: !input min_brightness
+  turn_off_at_minimum: !input turn_off_at_minimum
+  transition_s: !input transition
+
+  ikea_full_palette:
+    - kind: temp
+      value: 4000
+      name: Cool white
+    - kind: temp
+      value: 2700
+      name: Warm white
+    - kind: temp
+      value: 2200
+      name: Warm glow
+    - kind: temp
+      value: 1780
+      name: Candle light
+    - kind: hs
+      value: [28.2, 77.5]
+      name: Warm amber
+    - kind: hs
+      value: [11.0, 70.2]
+      name: Dark peach
+    - kind: hs
+      value: [333.6, 76.5]
+      name: Saturated pink
+    - kind: hs
+      value: [312.2, 34.3]
+      name: Light purple
+    - kind: hs
+      value: [222.3, 41.9]
+      name: Light blue
+
+  ikea_white_palette:
+    - kind: temp
+      value: 4000
+      name: Cool white
+    - kind: temp
+      value: 2700
+      name: Warm white
+    - kind: temp
+      value: 2200
+      name: Warm glow
+
+triggers:
+  - trigger: device
+    domain: mqtt
+    device_id: !input controller
+    type: action
+    subtype: toggle
+    id: toggle
+
+  - trigger: device
+    domain: mqtt
+    device_id: !input controller
+    type: action
+    subtype: toggle_hold
+    id: synchronize
+
+  - trigger: device
+    domain: mqtt
+    device_id: !input controller
+    type: action
+    subtype: brightness_up_click
+    id: brightness_up_click
+
+  - trigger: device
+    domain: mqtt
+    device_id: !input controller
+    type: action
+    subtype: brightness_down_click
+    id: brightness_down_click
+
+  - trigger: device
+    domain: mqtt
+    device_id: !input controller
+    type: action
+    subtype: brightness_up_hold
+    id: brightness_up_hold
+
+  - trigger: device
+    domain: mqtt
+    device_id: !input controller
+    type: action
+    subtype: brightness_down_hold
+    id: brightness_down_hold
+
+  - trigger: device
+    domain: mqtt
+    device_id: !input controller
+    type: action
+    subtype: brightness_up_release
+    id: brightness_release
+
+  - trigger: device
+    domain: mqtt
+    device_id: !input controller
+    type: action
+    subtype: brightness_down_release
+    id: brightness_release
+
+  - trigger: device
+    domain: mqtt
+    device_id: !input controller
+    type: action
+    subtype: arrow_left_click
+    id: left_click
+
+  - trigger: device
+    domain: mqtt
+    device_id: !input controller
+    type: action
+    subtype: arrow_right_click
+    id: right_click
+
+conditions:
+  - condition: template
+    value_template: "{{ selected_lights | count > 0 }}"
+
+actions:
+  - choose:
+      - conditions: "{{ trigger.id == 'toggle' }}"
+        sequence:
+          - action: light.toggle
+            target:
+              entity_id: !input lights
+            data:
+              transition: "{{ transition_s }}"
+
+      - conditions: "{{ trigger.id == 'synchronize' }}"
+        sequence:
+          - repeat:
+              for_each: "{{ selected_lights }}"
+              sequence:
+                - variables:
+                    light_entity: "{{ repeat.item }}"
+                - variables:
+                    modes: "{{ state_attr(light_entity, 'supported_color_modes') or [] }}"
+                    min_k: "{{ state_attr(light_entity, 'min_color_temp_kelvin') | int(2000) }}"
+                    max_k: "{{ state_attr(light_entity, 'max_color_temp_kelvin') | int(6500) }}"
+                - variables:
+                    safe_default_k: >-
+                      {% if 2700 < min_k %}{{ min_k }}
+                      {% elif 2700 > max_k %}{{ max_k }}
+                      {% else %}2700{% endif %}
+                - choose:
+                    - conditions: "{{ 'color_temp' in modes }}"
+                      sequence:
+                        - action: light.turn_on
+                          target:
+                            entity_id: "{{ light_entity }}"
+                          data:
+                            brightness_pct: 100
+                            color_temp_kelvin: "{{ safe_default_k }}"
+                            transition: "{{ transition_s }}"
+                    - conditions: "{{ modes | count > 0 and modes != ['onoff'] }}"
+                      sequence:
+                        - action: light.turn_on
+                          target:
+                            entity_id: "{{ light_entity }}"
+                          data:
+                            brightness_pct: 100
+                            transition: "{{ transition_s }}"
+                  default:
+                    - action: light.turn_on
+                      target:
+                        entity_id: "{{ light_entity }}"
+                      data:
+                        transition: "{{ transition_s }}"
+
+      - conditions: "{{ trigger.id == 'brightness_up_click' }}"
+        sequence:
+          - repeat:
+              for_each: "{{ selected_lights }}"
+              sequence:
+                - variables:
+                    light_entity: "{{ repeat.item }}"
+                - variables:
+                    modes: "{{ state_attr(light_entity, 'supported_color_modes') or [] }}"
+                    old_brightness: "{{ state_attr(light_entity, 'brightness') | int(0) }}"
+                    step_255: "{{ (255 * brightness_step_pct / 100) | round(0) | int }}"
+                - variables:
+                    new_brightness: "{{ [old_brightness + (step_255 | int), 255] | min }}"
+                - condition: template
+                  value_template: >
+                    {{ states(light_entity) not in ['unknown', 'unavailable']
+                       and modes | count > 0 and modes != ['onoff'] }}
+                - action: light.turn_on
+                  target:
+                    entity_id: "{{ light_entity }}"
+                  data:
+                    brightness: "{{ [new_brightness, 1] | max }}"
+                    transition: "{{ transition_s }}"
+
+      - conditions: "{{ trigger.id == 'brightness_down_click' }}"
+        sequence:
+          - repeat:
+              for_each: "{{ selected_lights }}"
+              sequence:
+                - variables:
+                    light_entity: "{{ repeat.item }}"
+                - variables:
+                    modes: "{{ state_attr(light_entity, 'supported_color_modes') or [] }}"
+                    old_brightness: "{{ state_attr(light_entity, 'brightness') | int(1) }}"
+                    step_255: "{{ (255 * brightness_step_pct / 100) | round(0) | int }}"
+                    min_brightness_255: >
+                      {{ [((255 * min_brightness_pct / 100) | round(0) | int), 1] | max }}
+                - variables:
+                    new_brightness: >
+                      {{ [old_brightness - (step_255 | int), min_brightness_255 | int] | max }}
+                - condition: template
+                  value_template: >
+                    {{ is_state(light_entity, 'on')
+                       and modes | count > 0 and modes != ['onoff'] }}
+                - choose:
+                    - conditions: >
+                        {{ turn_off_at_minimum
+                           and old_brightness <= (min_brightness_255 | int) }}
+                      sequence:
+                        - action: light.turn_off
+                          target:
+                            entity_id: "{{ light_entity }}"
+                          data:
+                            transition: "{{ transition_s }}"
+                  default:
+                    - action: light.turn_on
+                      target:
+                        entity_id: "{{ light_entity }}"
+                      data:
+                        brightness: "{{ new_brightness }}"
+                        transition: "{{ transition_s }}"
+
+      - conditions: "{{ trigger.id == 'brightness_up_hold' }}"
+        sequence:
+          - repeat:
+              while:
+                - condition: template
+                  value_template: "{{ true }}"
+              sequence:
+                - repeat:
+                    for_each: "{{ selected_lights }}"
+                    sequence:
+                      - variables:
+                          light_entity: "{{ repeat.item }}"
+                      - variables:
+                          modes: "{{ state_attr(light_entity, 'supported_color_modes') or [] }}"
+                          old_brightness: "{{ state_attr(light_entity, 'brightness') | int(0) }}"
+                      - variables:
+                          new_brightness: >
+                            {{ [old_brightness + ((255 * dim_step_pct / 100) | round(0) | int), 255] | min }}
+                      - condition: template
+                        value_template: >
+                          {{ states(light_entity) not in ['unknown', 'unavailable']
+                             and modes | count > 0 and modes != ['onoff'] }}
+                      - action: light.turn_on
+                        target:
+                          entity_id: "{{ light_entity }}"
+                        data:
+                          brightness: "{{ [new_brightness, 1] | max }}"
+                          transition: "{{ transition_s }}"
+                - delay:
+                    milliseconds: "{{ dim_interval_ms | int }}"
+
+      - conditions: "{{ trigger.id == 'brightness_down_hold' }}"
+        sequence:
+          - repeat:
+              while:
+                - condition: template
+                  value_template: "{{ true }}"
+              sequence:
+                - repeat:
+                    for_each: "{{ selected_lights }}"
+                    sequence:
+                      - variables:
+                          light_entity: "{{ repeat.item }}"
+                      - variables:
+                          modes: "{{ state_attr(light_entity, 'supported_color_modes') or [] }}"
+                          old_brightness: "{{ state_attr(light_entity, 'brightness') | int(1) }}"
+                          step_255: "{{ (255 * dim_step_pct / 100) | round(0) | int }}"
+                          min_brightness_255: >
+                            {{ [((255 * min_brightness_pct / 100) | round(0) | int), 1] | max }}
+                      - variables:
+                          new_brightness: >
+                            {{ [old_brightness - (step_255 | int), min_brightness_255 | int] | max }}
+                      - condition: template
+                        value_template: >
+                          {{ is_state(light_entity, 'on')
+                             and modes | count > 0 and modes != ['onoff'] }}
+                      - choose:
+                          - conditions: >
+                              {{ turn_off_at_minimum
+                                 and old_brightness <= (min_brightness_255 | int) }}
+                            sequence:
+                              - action: light.turn_off
+                                target:
+                                  entity_id: "{{ light_entity }}"
+                                data:
+                                  transition: "{{ transition_s }}"
+                        default:
+                          - action: light.turn_on
+                            target:
+                              entity_id: "{{ light_entity }}"
+                            data:
+                              brightness: "{{ new_brightness }}"
+                              transition: "{{ transition_s }}"
+                - delay:
+                    milliseconds: "{{ dim_interval_ms | int }}"
+
+      - conditions: "{{ trigger.id in ['left_click', 'right_click'] }}"
+        sequence:
+          - variables:
+              direction: "{{ 1 if trigger.id == 'right_click' else -1 }}"
+          - repeat:
+              for_each: "{{ selected_lights }}"
+              sequence:
+                - variables:
+                    light_entity: "{{ repeat.item }}"
+                - variables:
+                    modes: "{{ state_attr(light_entity, 'supported_color_modes') or [] }}"
+                    current_mode: "{{ state_attr(light_entity, 'color_mode') or '' }}"
+                    min_k: "{{ state_attr(light_entity, 'min_color_temp_kelvin') | int(2000) }}"
+                    max_k: "{{ state_attr(light_entity, 'max_color_temp_kelvin') | int(6500) }}"
+                - variables:
+                    has_colour: >
+                      {{ 'hs' in modes or 'xy' in modes or 'rgb' in modes
+                         or 'rgbw' in modes or 'rgbww' in modes }}
+                - variables:
+                    base_palette: >
+                      {{ ikea_full_palette if has_colour else ikea_white_palette }}
+                - variables:
+                    active_palette: >-
+                      {% set ns = namespace(items=[]) %}
+                      {%- for preset in base_palette %}
+                        {%- if preset.kind != 'temp'
+                               or (preset.value | int >= min_k | int
+                                   and preset.value | int <= max_k | int) %}
+                          {%- set ns.items = ns.items + [preset] %}
+                        {%- endif %}
+                      {%- endfor %}
+                      {{- ns.items }}
+                - condition: template
+                  value_template: "{{ active_palette | count > 0 }}"
+                - variables:
+                    current_index: >-
+                      {% set ns = namespace(best=0, distance=999999.0) %}
+                      {% if current_mode == 'color_temp' %}
+                        {% set current_k = state_attr(light_entity, 'color_temp_kelvin') | int(2700) %}
+                        {% for preset in active_palette %}
+                          {% if preset.kind == 'temp' %}
+                            {% set distance = (preset.value - current_k) | abs | float %}
+                            {% if distance < ns.distance %}
+                              {% set ns.best = loop.index0 %}
+                              {% set ns.distance = distance %}
+                            {% endif %}
+                          {% endif %}
+                        {% endfor %}
+                      {% else %}
+                        {% set current_hs = state_attr(light_entity, 'hs_color') %}
+                        {% if current_hs %}
+                          {% set current_h = current_hs[0] | float %}
+                          {% set current_s = current_hs[1] | float %}
+                          {% for preset in active_palette %}
+                            {% if preset.kind == 'hs' %}
+                              {% set raw_hue = (preset.value[0] - current_h) | abs | float %}
+                              {% set hue_distance = [raw_hue, 360 - raw_hue] | min %}
+                              {% set sat_distance = (preset.value[1] - current_s) | abs | float %}
+                              {% set distance = hue_distance + (sat_distance * 0.5) %}
+                              {% if distance < ns.distance %}
+                                {% set ns.best = loop.index0 %}
+                                {% set ns.distance = distance %}
+                              {% endif %}
+                            {% endif %}
+                          {% endfor %}
+                        {% endif %}
+                      {% endif %}
+                      {{ ns.best }}
+                - variables:
+                    next_index: >
+                      {{ (((current_index | int) + (direction | int)) % (active_palette | count)) }}
+                - variables:
+                    next_preset: "{{ active_palette[next_index | int] }}"
+                - choose:
+                    - conditions: "{{ next_preset.kind == 'temp' and 'color_temp' in modes }}"
+                      sequence:
+                        - action: light.turn_on
+                          target:
+                            entity_id: "{{ light_entity }}"
+                          data:
+                            color_temp_kelvin: "{{ next_preset.value | int }}"
+                            transition: "{{ transition_s }}"
+                    - conditions: >
+                        {{ next_preset.kind == 'hs'
+                           and ('hs' in modes or 'xy' in modes or 'rgb' in modes
+                                or 'rgbw' in modes or 'rgbww' in modes) }}
+                      sequence:
+                        - action: light.turn_on
+                          target:
+                            entity_id: "{{ light_entity }}"
+                          data:
+                            hs_color: "{{ next_preset.value }}"
+                            transition: "{{ transition_s }}"
+
+      - conditions: "{{ trigger.id == 'brightness_release' }}"
+        sequence: []
+
+mode: restart
+max_exceeded: silent
