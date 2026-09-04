@@ -1,5 +1,5 @@
 blueprint:
-  name: IKEA STYRBAR — IKEA-style light control (Zigbee2MQTT)
+  name: IKEA STYRBAR — IKEA-style light control (Zigbee2MQTT) v1.1
   description: >
     Makes an IKEA STYRBAR remote behave like IKEA's own light control:
     short press top/bottom turns lights on/off; holding top/bottom dims;
@@ -32,6 +32,29 @@ blueprint:
           reorder: true
           filter:
             - domain: light
+
+    min_brightness:
+      name: Minimum brightness on hold-down
+      description: >
+        Lowest brightness reached while holding the bottom button.
+        Set this to 10% if you want the lights to stop dimming at 10%.
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 50
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+
+    turn_off_at_minimum:
+      name: Turn off when minimum is reached
+      description: >
+        Disabled: holding the bottom button stops at the minimum brightness.
+        Enabled: continuing to hold after reaching the minimum turns the lights off.
+      default: false
+      selector:
+        boolean:
 
     advanced:
       name: Advanced
@@ -78,10 +101,10 @@ variables:
   selected_lights: !input lights
   dim_step_pct: !input dim_step
   dim_interval_ms: !input dim_interval
+  min_brightness_pct: !input min_brightness
+  turn_off_at_minimum: !input turn_off_at_minimum
   transition_s: !input transition
 
-  # The nine presets IKEA documents for remote-control operation of
-  # colour + white-spectrum bulbs.
   ikea_full_palette:
     - kind: temp
       value: 4000
@@ -209,7 +232,6 @@ conditions:
 
 actions:
   - choose:
-      # Top, short press -> on.
       - conditions: "{{ trigger.id == 'on' }}"
         sequence:
           - action: light.turn_on
@@ -218,7 +240,6 @@ actions:
             data:
               transition: "{{ transition_s }}"
 
-      # Bottom, short press -> off.
       - conditions: "{{ trigger.id == 'off' }}"
         sequence:
           - action: light.turn_off
@@ -227,8 +248,6 @@ actions:
             data:
               transition: "{{ transition_s }}"
 
-      # Top, hold -> continuously brighten. The brightness_stop trigger
-      # restarts this automation and therefore cancels the loop immediately.
       - conditions: "{{ trigger.id == 'brightness_up' }}"
         sequence:
           - repeat:
@@ -261,7 +280,6 @@ actions:
                 - delay:
                     milliseconds: "{{ dim_interval_ms | int }}"
 
-      # Bottom, hold -> continuously dim, but never switch the lamp off.
       - conditions: "{{ trigger.id == 'brightness_down' }}"
         sequence:
           - repeat:
@@ -277,24 +295,37 @@ actions:
                       - variables:
                           modes: "{{ state_attr(light_entity, 'supported_color_modes') or [] }}"
                           old_brightness: "{{ state_attr(light_entity, 'brightness') | int(1) }}"
+                          step_255: "{{ (255 * dim_step_pct / 100) | round(0) | int }}"
+                          min_brightness_255: >
+                            {{ [((255 * min_brightness_pct / 100) | round(0) | int), 1] | max }}
                       - variables:
                           new_brightness: >
-                            {{ [old_brightness - ((255 * dim_step_pct / 100) | round(0) | int), 1] | max }}
+                            {{ [old_brightness - (step_255 | int), min_brightness_255 | int] | max }}
                       - condition: template
                         value_template: >
                           {{ is_state(light_entity, 'on')
                              and (modes | count > 0)
                              and modes != ['onoff'] }}
-                      - action: light.turn_on
-                        target:
-                          entity_id: "{{ light_entity }}"
-                        data:
-                          brightness: "{{ new_brightness }}"
-                          transition: "{{ transition_s }}"
+                      - choose:
+                          - conditions: >
+                              {{ turn_off_at_minimum
+                                 and old_brightness <= (min_brightness_255 | int) }}
+                            sequence:
+                              - action: light.turn_off
+                                target:
+                                  entity_id: "{{ light_entity }}"
+                                data:
+                                  transition: "{{ transition_s }}"
+                        default:
+                          - action: light.turn_on
+                            target:
+                              entity_id: "{{ light_entity }}"
+                            data:
+                              brightness: "{{ new_brightness }}"
+                              transition: "{{ transition_s }}"
                 - delay:
                     milliseconds: "{{ dim_interval_ms | int }}"
 
-      # Left/right, short press -> previous/next IKEA preset.
       - conditions: "{{ trigger.id in ['left_click', 'right_click'] }}"
         sequence:
           - variables:
@@ -390,8 +421,6 @@ actions:
                             hs_color: "{{ next_preset.value }}"
                             transition: "{{ transition_s }}"
 
-      # IKEA documents a long press on either arrow as the synchronization
-      # action that restores the default white setting (2700 K).
       - conditions: "{{ trigger.id in ['left_hold', 'right_hold'] }}"
         sequence:
           - repeat:
@@ -417,8 +446,6 @@ actions:
                     color_temp_kelvin: "{{ safe_default_k }}"
                     transition: "{{ transition_s }}"
 
-      # Stop/release events intentionally do nothing. In mode: restart they
-      # exist to interrupt a currently-running hold loop.
       - conditions: >
           {{ trigger.id in ['brightness_stop', 'left_release', 'right_release'] }}
         sequence: []
